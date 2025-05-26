@@ -1,4 +1,3 @@
-CREATE DATABASE cluster_admin;
 USE cluster_admin;
 
 -- Tabla de usuarios (inquilinos y comité)

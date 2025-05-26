@@ -2,8 +2,8 @@
 class Database {
     private $host = 'localhost';
     private $db_name = 'cluster_admin';
-    private $username = 'root';
-    private $password = '';
+    private $username = 'localhost';
+    private $password = 'kronos185';
     public $conn;
 
     public function getConnection() {
