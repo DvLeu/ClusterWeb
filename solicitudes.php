@@ -1,4 +1,118 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar sesión
+if (!isset($_SESSION['usuario_id'])) {
+    header("Location: login.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+$message = '';
+$messageType = '';
+
+// Procesar nueva solicitud
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['crear_solicitud'])) {
+    $titulo = trim($_POST['titulo']);
+    $descripcion = trim($_POST['descripcion']);
+
+    // Validaciones
+    if (empty($titulo)) {
+        $message = "El título es obligatorio";
+        $messageType = 'error';
+    } elseif (empty($descripcion)) {
+        $message = "La descripción es obligatoria";
+        $messageType = 'error';
+    } else {
+        try {
+            $query = "INSERT INTO solicitudes_servicios (usuario_id, titulo, descripcion) 
+                     VALUES (?, ?, ?)";
+            $stmt = $db->prepare($query);
+            $stmt->execute([$_SESSION['usuario_id'], $titulo, $descripcion]);
+            
+            $message = "Solicitud creada correctamente";
+            $messageType = 'success';
+            
+            // Limpiar formulario
+            $_POST = array();
+        } catch (Exception $e) {
+            $message = "Error al crear la solicitud: " . $e->getMessage();
+            $messageType = 'error';
+        }
+    }
+}
+
+// Procesar actualización de estado (solo comité)
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['actualizar_solicitud']) && in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    $solicitud_id = $_POST['solicitud_id'];
+    $nuevo_estado = $_POST['nuevo_estado'];
+    $comentario = trim($_POST['comentario_comite']);
+
+    try {
+        $query = "UPDATE solicitudes_servicios 
+                 SET estado = ?, comentario_comite = ?, fecha_actualizacion = NOW() 
+                 WHERE id = ?";
+        $stmt = $db->prepare($query);
+        $stmt->execute([$nuevo_estado, $comentario, $solicitud_id]);
+        
+        $message = "Solicitud actualizada correctamente";
+        $messageType = 'success';
+    } catch (Exception $e) {
+        $message = "Error al actualizar la solicitud: " . $e->getMessage();
+        $messageType = 'error';
+    }
+}
+
+// Filtros
+$filtro_estado = $_GET['estado'] ?? 'todos';
+$filtro_usuario = $_GET['usuario'] ?? '';
+
+// Construir consulta con filtros
+$where_conditions = [];
+$params = [];
+
+if ($filtro_estado != 'todos') {
+    $where_conditions[] = "s.estado = ?";
+    $params[] = $filtro_estado;
+}
+
+if ($filtro_usuario && in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    $where_conditions[] = "s.usuario_id = ?";
+    $params[] = $filtro_usuario;
+} elseif ($_SESSION['rol'] == 'inquilino') {
+    // Los inquilinos solo ven sus propias solicitudes
+    $where_conditions[] = "s.usuario_id = ?";
+    $params[] = $_SESSION['usuario_id'];
+}
+
+$where_clause = '';
+if (!empty($where_conditions)) {
+    $where_clause = "WHERE " . implode(' AND ', $where_conditions);
+}
+
+// Obtener solicitudes
+$query = "SELECT s.*, u.nombre, u.numero_casa, u.rol
+          FROM solicitudes_servicios s 
+          JOIN usuarios u ON s.usuario_id = u.id
+          $where_clause
+          ORDER BY s.fecha_solicitud DESC";
+
+$stmt = $db->prepare($query);
+$stmt->execute($params);
+$solicitudes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Obtener usuarios para filtro (solo para el comité)
+$usuarios_disponibles = [];
+if (in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    $query = "SELECT id, nombre, numero_casa FROM usuarios WHERE rol = 'inquilino' ORDER BY numero_casa";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $usuarios_disponibles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -304,122 +418,6 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar sesión
-    if (!isset($_SESSION['usuario_id'])) {
-        header("Location: login.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-    
-    $message = '';
-    $messageType = '';
-
-    // Procesar nueva solicitud
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['crear_solicitud'])) {
-        $titulo = trim($_POST['titulo']);
-        $descripcion = trim($_POST['descripcion']);
-
-        // Validaciones
-        if (empty($titulo)) {
-            $message = "El título es obligatorio";
-            $messageType = 'error';
-        } elseif (empty($descripcion)) {
-            $message = "La descripción es obligatoria";
-            $messageType = 'error';
-        } else {
-            try {
-                $query = "INSERT INTO solicitudes_servicios (usuario_id, titulo, descripcion) 
-                         VALUES (?, ?, ?)";
-                $stmt = $db->prepare($query);
-                $stmt->execute([$_SESSION['usuario_id'], $titulo, $descripcion]);
-                
-                $message = "Solicitud creada correctamente";
-                $messageType = 'success';
-                
-                // Limpiar formulario
-                $_POST = array();
-            } catch (Exception $e) {
-                $message = "Error al crear la solicitud: " . $e->getMessage();
-                $messageType = 'error';
-            }
-        }
-    }
-
-    // Procesar actualización de estado (solo comité)
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['actualizar_solicitud']) && in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        $solicitud_id = $_POST['solicitud_id'];
-        $nuevo_estado = $_POST['nuevo_estado'];
-        $comentario = trim($_POST['comentario_comite']);
-
-        try {
-            $query = "UPDATE solicitudes_servicios 
-                     SET estado = ?, comentario_comite = ?, fecha_actualizacion = NOW() 
-                     WHERE id = ?";
-            $stmt = $db->prepare($query);
-            $stmt->execute([$nuevo_estado, $comentario, $solicitud_id]);
-            
-            $message = "Solicitud actualizada correctamente";
-            $messageType = 'success';
-        } catch (Exception $e) {
-            $message = "Error al actualizar la solicitud: " . $e->getMessage();
-            $messageType = 'error';
-        }
-    }
-
-    // Filtros
-    $filtro_estado = $_GET['estado'] ?? 'todos';
-    $filtro_usuario = $_GET['usuario'] ?? '';
-
-    // Construir consulta con filtros
-    $where_conditions = [];
-    $params = [];
-
-    if ($filtro_estado != 'todos') {
-        $where_conditions[] = "s.estado = ?";
-        $params[] = $filtro_estado;
-    }
-
-    if ($filtro_usuario && in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        $where_conditions[] = "s.usuario_id = ?";
-        $params[] = $filtro_usuario;
-    } elseif ($_SESSION['rol'] == 'inquilino') {
-        // Los inquilinos solo ven sus propias solicitudes
-        $where_conditions[] = "s.usuario_id = ?";
-        $params[] = $_SESSION['usuario_id'];
-    }
-
-    $where_clause = '';
-    if (!empty($where_conditions)) {
-        $where_clause = "WHERE " . implode(' AND ', $where_conditions);
-    }
-
-    // Obtener solicitudes
-    $query = "SELECT s.*, u.nombre, u.numero_casa, u.rol
-              FROM solicitudes_servicios s 
-              JOIN usuarios u ON s.usuario_id = u.id
-              $where_clause
-              ORDER BY s.fecha_solicitud DESC";
-    
-    $stmt = $db->prepare($query);
-    $stmt->execute($params);
-    $solicitudes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Obtener usuarios para filtro (solo para el comité)
-    $usuarios_disponibles = [];
-    if (in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        $query = "SELECT id, nombre, numero_casa FROM usuarios WHERE rol = 'inquilino' ORDER BY numero_casa";
-        $stmt = $db->prepare($query);
-        $stmt->execute();
-        $usuarios_disponibles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-    ?>
-
     <div class="header">
         <h1>🔧 Solicitudes de Servicio</h1>
         <div class="nav-links">
@@ -492,6 +490,10 @@
                     <select name="usuario" id="usuario">
                         <option value="">Todos los usuarios</option>
                         <?php foreach ($usuarios_disponibles as $usuario): ?>
+                        <option value="<?php echo $usuario['id']; ?>" 
+                                <?php echo $filtro_usuario == $usuario['id'] ? 'selected' : ''; ?>>
+                            Casa #<?php echo $usuario['numero_casa']; ?> - <?php echo $usuario['nombre']; ?>
+                        </option>
                         <?php endforeach; ?>
                     </select>
                 </div>

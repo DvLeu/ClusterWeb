@@ -1,4 +1,86 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar que sea miembro del comité
+if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    header("Location: dashboard.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+$message = '';
+$messageType = '';
+
+// Procesar verificación de pago
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['verificar_pago'])) {
+    $pago_id = $_POST['pago_id'];
+    
+    try {
+        $db->beginTransaction();
+        
+        // Verificar pago
+        $query = "UPDATE pagos_mantenimiento SET verificado = 1, verificado_por = ?, fecha_verificacion = NOW() WHERE id = ?";
+        $stmt = $db->prepare($query);
+        $stmt->execute([$_SESSION['usuario_id'], $pago_id]);
+        
+        // Generar recibo
+        $numero_recibo = 'REC-' . date('Y') . '-' . str_pad($pago_id, 5, '0', STR_PAD_LEFT);
+        $query = "INSERT INTO recibos (pago_id, numero_recibo) VALUES (?, ?)";
+        $stmt = $db->prepare($query);
+        $stmt->execute([$pago_id, $numero_recibo]);
+        
+        $db->commit();
+        $message = "Pago verificado correctamente. Recibo generado: " . $numero_recibo;
+        $messageType = 'success';
+        
+    } catch (Exception $e) {
+        $db->rollback();
+        $message = "Error al verificar el pago: " . $e->getMessage();
+        $messageType = 'error';
+    }
+}
+
+// Filtros
+$filtro_estado = $_GET['estado'] ?? 'todos';
+$filtro_mes = $_GET['mes'] ?? date('Y-m');
+
+// Construir consulta con filtros
+$where_conditions = [];
+$params = [];
+
+if ($filtro_estado != 'todos') {
+    if ($filtro_estado == 'verificado') {
+        $where_conditions[] = "pm.verificado = 1";
+    } else {
+        $where_conditions[] = "pm.verificado = 0";
+    }
+}
+
+if ($filtro_mes) {
+    $where_conditions[] = "pm.mes_correspondiente = ?";
+    $params[] = $filtro_mes;
+}
+
+$where_clause = '';
+if (!empty($where_conditions)) {
+    $where_clause = "WHERE " . implode(' AND ', $where_conditions);
+}
+
+$query = "SELECT pm.*, u.nombre, u.numero_casa, u.email,
+                 CASE WHEN pm.verificado = 1 THEN CONCAT(uv.nombre, ' (', uv.rol, ')') ELSE NULL END as verificado_por_nombre
+          FROM pagos_mantenimiento pm 
+          JOIN usuarios u ON pm.usuario_id = u.id
+          LEFT JOIN usuarios uv ON pm.verificado_por = uv.id
+          $where_clause
+          ORDER BY pm.fecha_pago DESC";
+
+$stmt = $db->prepare($query);
+$stmt->execute($params);
+$pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -157,55 +239,6 @@
             color: #155724;
         }
 
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-        }
-
-        .modal-content {
-            background-color: white;
-            margin: 5% auto;
-            padding: 2rem;
-            border-radius: 10px;
-            width: 90%;
-            max-width: 500px;
-        }
-
-        .close {
-            color: #aaa;
-            float: right;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        .close:hover {
-            color: black;
-        }
-
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 500;
-        }
-
-        .form-group input, .form-group textarea {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid #e1e5e9;
-            border-radius: 5px;
-        }
-
         .alert {
             padding: 1rem;
             border-radius: 5px;
@@ -240,90 +273,6 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar que sea miembro del comité
-    if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        header("Location: dashboard.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-    
-    $message = '';
-    $messageType = '';
-
-    // Procesar verificación de pago
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['verificar_pago'])) {
-        $pago_id = $_POST['pago_id'];
-        
-        try {
-            $db->beginTransaction();
-            
-            // Verificar pago
-            $query = "UPDATE pagos_mantenimiento SET verificado = 1, verificado_por = ?, fecha_verificacion = NOW() WHERE id = ?";
-            $stmt = $db->prepare($query);
-            $stmt->execute([$_SESSION['usuario_id'], $pago_id]);
-            
-            // Generar recibo
-            $numero_recibo = 'REC-' . date('Y') . '-' . str_pad($pago_id, 5, '0', STR_PAD_LEFT);
-            $query = "INSERT INTO recibos (pago_id, numero_recibo) VALUES (?, ?)";
-            $stmt = $db->prepare($query);
-            $stmt->execute([$pago_id, $numero_recibo]);
-            
-            $db->commit();
-            $message = "Pago verificado correctamente. Recibo generado: " . $numero_recibo;
-            $messageType = 'success';
-            
-        } catch (Exception $e) {
-            $db->rollback();
-            $message = "Error al verificar el pago: " . $e->getMessage();
-            $messageType = 'error';
-        }
-    }
-
-    // Filtros
-    $filtro_estado = $_GET['estado'] ?? 'todos';
-    $filtro_mes = $_GET['mes'] ?? date('Y-m');
-
-    // Construir consulta con filtros
-    $where_conditions = [];
-    $params = [];
-
-    if ($filtro_estado != 'todos') {
-        if ($filtro_estado == 'verificado') {
-            $where_conditions[] = "pm.verificado = 1";
-        } else {
-            $where_conditions[] = "pm.verificado = 0";
-        }
-    }
-
-    if ($filtro_mes) {
-        $where_conditions[] = "pm.mes_correspondiente = ?";
-        $params[] = $filtro_mes;
-    }
-
-    $where_clause = '';
-    if (!empty($where_conditions)) {
-        $where_clause = "WHERE " . implode(' AND ', $where_conditions);
-    }
-
-    $query = "SELECT pm.*, u.nombre, u.numero_casa, u.email,
-                     CASE WHEN pm.verificado = 1 THEN CONCAT(uv.nombre, ' (', uv.rol, ')') ELSE NULL END as verificado_por_nombre
-              FROM pagos_mantenimiento pm 
-              JOIN usuarios u ON pm.usuario_id = u.id
-              LEFT JOIN usuarios uv ON pm.verificado_por = uv.id
-              $where_clause
-              ORDER BY pm.fecha_pago DESC";
-    
-    $stmt = $db->prepare($query);
-    $stmt->execute($params);
-    $pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    ?>
-
     <div class="header">
         <h1>💰 Gestión de Pagos</h1>
         <div class="nav-links">

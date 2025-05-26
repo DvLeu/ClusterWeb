@@ -1,4 +1,121 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar que sea miembro del comité
+if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    header("Location: dashboard.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+// Parámetros del reporte
+$tipo_reporte = $_GET['tipo'] ?? 'mensual';
+$periodo_inicio = $_GET['inicio'] ?? date('Y-m-01');
+$periodo_fin = $_GET['fin'] ?? date('Y-m-t');
+$casa_especifica = $_GET['casa'] ?? '';
+
+// Si es reporte mensual, ajustar fechas
+if ($tipo_reporte == 'mensual') {
+    $mes = $_GET['mes'] ?? date('Y-m');
+    $periodo_inicio = $mes . '-01';
+    $periodo_fin = date('Y-m-t', strtotime($periodo_inicio));
+} elseif ($tipo_reporte == 'anual') {
+    $año = $_GET['año'] ?? date('Y');
+    $periodo_inicio = $año . '-01-01';
+    $periodo_fin = $año . '-12-31';
+}
+
+// Función para obtener datos financieros
+function obtenerDatosFinancieros($db, $inicio, $fin, $casa = '') {
+    $datos = [
+        'ingresos' => 0,
+        'egresos' => 0,
+        'pagos_verificados' => 0,
+        'pagos_pendientes' => 0,
+        'balance' => 0
+    ];
+
+    // Condición para casa específica
+    $casa_condition = $casa ? "AND u.numero_casa = $casa" : "";
+
+    // Ingresos (pagos verificados)
+    $query = "SELECT SUM(pm.total) as total, COUNT(*) as cantidad 
+              FROM pagos_mantenimiento pm 
+              JOIN usuarios u ON pm.usuario_id = u.id
+              WHERE pm.verificado = 1 
+              AND pm.fecha_pago BETWEEN ? AND ? 
+              $casa_condition";
+    $stmt = $db->prepare($query);
+    $stmt->execute([$inicio, $fin]);
+    $ingresos = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    $datos['ingresos'] = $ingresos['total'] ?? 0;
+    $datos['pagos_verificados'] = $ingresos['cantidad'] ?? 0;
+
+    // Pagos pendientes
+    $query = "SELECT COUNT(*) as cantidad 
+              FROM pagos_mantenimiento pm 
+              JOIN usuarios u ON pm.usuario_id = u.id
+              WHERE pm.verificado = 0 
+              AND pm.fecha_pago BETWEEN ? AND ? 
+              $casa_condition";
+    $stmt = $db->prepare($query);
+    $stmt->execute([$inicio, $fin]);
+    $pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
+    $datos['pagos_pendientes'] = $pendientes['cantidad'] ?? 0;
+
+    // Egresos (solo si no es casa específica)
+    if (!$casa) {
+        $query = "SELECT SUM(monto) as total FROM egresos WHERE fecha_pago BETWEEN ? AND ?";
+        $stmt = $db->prepare($query);
+        $stmt->execute([$inicio, $fin]);
+        $egresos = $stmt->fetch(PDO::FETCH_ASSOC);
+        $datos['egresos'] = $egresos['total'] ?? 0;
+    }
+
+    $datos['balance'] = $datos['ingresos'] - $datos['egresos'];
+
+    return $datos;
+}
+
+// Obtener datos del reporte
+$datos_reporte = obtenerDatosFinancieros($db, $periodo_inicio, $periodo_fin, $casa_especifica);
+
+// Obtener detalles de pagos
+$casa_condition = $casa_especifica ? "AND u.numero_casa = " . intval($casa_especifica) : "";
+$query = "SELECT pm.*, u.nombre, u.numero_casa, r.numero_recibo
+          FROM pagos_mantenimiento pm 
+          JOIN usuarios u ON pm.usuario_id = u.id
+          LEFT JOIN recibos r ON pm.id = r.pago_id
+          WHERE pm.fecha_pago BETWEEN ? AND ? 
+          $casa_condition
+          ORDER BY pm.fecha_pago DESC";
+$stmt = $db->prepare($query);
+$stmt->execute([$periodo_inicio, $periodo_fin]);
+$detalle_pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Obtener detalles de egresos (solo si no es casa específica)
+$detalle_egresos = [];
+if (!$casa_especifica) {
+    $query = "SELECT e.*, u.nombre as realizado_por_nombre
+              FROM egresos e 
+              JOIN usuarios u ON e.realizado_por = u.id
+              WHERE e.fecha_pago BETWEEN ? AND ?
+              ORDER BY e.fecha_pago DESC";
+    $stmt = $db->prepare($query);
+    $stmt->execute([$periodo_inicio, $periodo_fin]);
+    $detalle_egresos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Obtener casas para el filtro
+$query = "SELECT DISTINCT numero_casa FROM usuarios WHERE rol = 'inquilino' ORDER BY numero_casa";
+$stmt = $db->prepare($query);
+$stmt->execute();
+$casas_disponibles = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -155,14 +272,6 @@
             font-weight: bold;
         }
 
-        .chart-container {
-            background: white;
-            padding: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            margin-bottom: 2rem;
-        }
-
         .details-section {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -272,125 +381,6 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar que sea miembro del comité
-    if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        header("Location: dashboard.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-
-    // Parámetros del reporte
-    $tipo_reporte = $_GET['tipo'] ?? 'mensual';
-    $periodo_inicio = $_GET['inicio'] ?? date('Y-m-01');
-    $periodo_fin = $_GET['fin'] ?? date('Y-m-t');
-    $casa_especifica = $_GET['casa'] ?? '';
-
-    // Si es reporte mensual, ajustar fechas
-    if ($tipo_reporte == 'mensual') {
-        $mes = $_GET['mes'] ?? date('Y-m');
-        $periodo_inicio = $mes . '-01';
-        $periodo_fin = date('Y-m-t', strtotime($periodo_inicio));
-    } elseif ($tipo_reporte == 'anual') {
-        $año = $_GET['año'] ?? date('Y');
-        $periodo_inicio = $año . '-01-01';
-        $periodo_fin = $año . '-12-31';
-    }
-
-    // Función para obtener datos financieros
-    function obtenerDatosFinancieros($db, $inicio, $fin, $casa = '') {
-        $datos = [
-            'ingresos' => 0,
-            'egresos' => 0,
-            'pagos_verificados' => 0,
-            'pagos_pendientes' => 0,
-            'balance' => 0
-        ];
-
-        // Condición para casa específica
-        $casa_condition = $casa ? "AND u.numero_casa = $casa" : "";
-
-        // Ingresos (pagos verificados)
-        $query = "SELECT SUM(pm.total) as total, COUNT(*) as cantidad 
-                  FROM pagos_mantenimiento pm 
-                  JOIN usuarios u ON pm.usuario_id = u.id
-                  WHERE pm.verificado = 1 
-                  AND pm.fecha_pago BETWEEN ? AND ? 
-                  $casa_condition";
-        $stmt = $db->prepare($query);
-        $stmt->execute([$inicio, $fin]);
-        $ingresos = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $datos['ingresos'] = $ingresos['total'] ?? 0;
-        $datos['pagos_verificados'] = $ingresos['cantidad'] ?? 0;
-
-        // Pagos pendientes
-        $query = "SELECT COUNT(*) as cantidad 
-                  FROM pagos_mantenimiento pm 
-                  JOIN usuarios u ON pm.usuario_id = u.id
-                  WHERE pm.verificado = 0 
-                  AND pm.fecha_pago BETWEEN ? AND ? 
-                  $casa_condition";
-        $stmt = $db->prepare($query);
-        $stmt->execute([$inicio, $fin]);
-        $pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
-        $datos['pagos_pendientes'] = $pendientes['cantidad'] ?? 0;
-
-        // Egresos (solo si no es casa específica)
-        if (!$casa) {
-            $query = "SELECT SUM(monto) as total FROM egresos WHERE fecha_pago BETWEEN ? AND ?";
-            $stmt = $db->prepare($query);
-            $stmt->execute([$inicio, $fin]);
-            $egresos = $stmt->fetch(PDO::FETCH_ASSOC);
-            $datos['egresos'] = $egresos['total'] ?? 0;
-        }
-
-        $datos['balance'] = $datos['ingresos'] - $datos['egresos'];
-
-        return $datos;
-    }
-
-    // Obtener datos del reporte
-    $datos_reporte = obtenerDatosFinancieros($db, $periodo_inicio, $periodo_fin, $casa_especifica);
-
-    // Obtener detalles de pagos
-    $casa_condition = $casa_especifica ? "AND u.numero_casa = " . intval($casa_especifica) : "";
-    $query = "SELECT pm.*, u.nombre, u.numero_casa, r.numero_recibo
-              FROM pagos_mantenimiento pm 
-              JOIN usuarios u ON pm.usuario_id = u.id
-              LEFT JOIN recibos r ON pm.id = r.pago_id
-              WHERE pm.fecha_pago BETWEEN ? AND ? 
-              $casa_condition
-              ORDER BY pm.fecha_pago DESC";
-    $stmt = $db->prepare($query);
-    $stmt->execute([$periodo_inicio, $periodo_fin]);
-    $detalle_pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Obtener detalles de egresos (solo si no es casa específica)
-    $detalle_egresos = [];
-    if (!$casa_especifica) {
-        $query = "SELECT e.*, u.nombre as realizado_por_nombre
-                  FROM egresos e 
-                  JOIN usuarios u ON e.realizado_por = u.id
-                  WHERE e.fecha_pago BETWEEN ? AND ?
-                  ORDER BY e.fecha_pago DESC";
-        $stmt = $db->prepare($query);
-        $stmt->execute([$periodo_inicio, $periodo_fin]);
-        $detalle_egresos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    // Obtener casas para el filtro
-    $query = "SELECT DISTINCT numero_casa FROM usuarios WHERE rol = 'inquilino' ORDER BY numero_casa";
-    $stmt = $db->prepare($query);
-    $stmt->execute();
-    $casas_disponibles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    ?>
-
     <div class="header">
         <h1>📈 Reportes Financieros</h1>
         <div class="nav-links">

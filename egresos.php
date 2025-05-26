@@ -1,4 +1,117 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar que sea miembro del comité
+if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    header("Location: dashboard.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+$message = '';
+$messageType = '';
+
+// Procesar nuevo egreso
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['registrar_egreso'])) {
+    $monto = floatval($_POST['monto']);
+    $pagado_a = trim($_POST['pagado_a']);
+    $fecha_pago = $_POST['fecha_pago'];
+    $motivo = trim($_POST['motivo']);
+
+    // Validaciones
+    if ($monto <= 0) {
+        $message = "El monto debe ser mayor a 0";
+        $messageType = 'error';
+    } elseif (empty($pagado_a)) {
+        $message = "Debe especificar a quién se le pagó";
+        $messageType = 'error';
+    } elseif (empty($fecha_pago)) {
+        $message = "Debe seleccionar la fecha de pago";
+        $messageType = 'error';
+    } elseif (empty($motivo)) {
+        $message = "Debe especificar el motivo del egreso";
+        $messageType = 'error';
+    } else {
+        try {
+            $query = "INSERT INTO egresos (monto, pagado_a, fecha_pago, motivo, realizado_por) 
+                     VALUES (?, ?, ?, ?, ?)";
+            $stmt = $db->prepare($query);
+            $stmt->execute([$monto, $pagado_a, $fecha_pago, $motivo, $_SESSION['usuario_id']]);
+            
+            $message = "Egreso registrado correctamente";
+            $messageType = 'success';
+            
+            // Limpiar formulario
+            $_POST = array();
+        } catch (Exception $e) {
+            $message = "Error al registrar el egreso: " . $e->getMessage();
+            $messageType = 'error';
+        }
+    }
+}
+
+// Filtros
+$filtro_mes = $_GET['mes'] ?? date('Y-m');
+$filtro_usuario = $_GET['usuario'] ?? '';
+
+// Construir consulta con filtros
+$where_conditions = [];
+$params = [];
+
+if ($filtro_mes) {
+    $where_conditions[] = "DATE_FORMAT(e.fecha_pago, '%Y-%m') = ?";
+    $params[] = $filtro_mes;
+}
+
+if ($filtro_usuario) {
+    $where_conditions[] = "e.realizado_por = ?";
+    $params[] = $filtro_usuario;
+}
+
+$where_clause = '';
+if (!empty($where_conditions)) {
+    $where_clause = "WHERE " . implode(' AND ', $where_conditions);
+}
+
+// Obtener egresos
+$query = "SELECT e.*, u.nombre as realizado_por_nombre, u.rol
+          FROM egresos e 
+          JOIN usuarios u ON e.realizado_por = u.id
+          $where_clause
+          ORDER BY e.fecha_pago DESC";
+
+$stmt = $db->prepare($query);
+$stmt->execute($params);
+$egresos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Obtener miembros del comité para filtro
+$query = "SELECT id, nombre, rol FROM usuarios WHERE rol IN ('presidente', 'secretario', 'vocal') ORDER BY rol, nombre";
+$stmt = $db->prepare($query);
+$stmt->execute();
+$miembros_comite = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Calcular estadísticas
+$total_egresos = array_sum(array_column($egresos, 'monto'));
+$total_mes_actual = 0;
+$total_general = 0;
+
+// Total del mes actual
+$query = "SELECT SUM(monto) as total FROM egresos WHERE DATE_FORMAT(fecha_pago, '%Y-%m') = ?";
+$stmt = $db->prepare($query);
+$stmt->execute([date('Y-m')]);
+$result = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_mes_actual = $result['total'] ?? 0;
+
+// Total general
+$query = "SELECT SUM(monto) as total FROM egresos";
+$stmt = $db->prepare($query);
+$stmt->execute();
+$result = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_general = $result['total'] ?? 0;
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -231,121 +344,6 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar que sea miembro del comité
-    if (!in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        header("Location: dashboard.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-    
-    $message = '';
-    $messageType = '';
-
-    // Procesar nuevo egreso
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['registrar_egreso'])) {
-        $monto = floatval($_POST['monto']);
-        $pagado_a = trim($_POST['pagado_a']);
-        $fecha_pago = $_POST['fecha_pago'];
-        $motivo = trim($_POST['motivo']);
-
-        // Validaciones
-        if ($monto <= 0) {
-            $message = "El monto debe ser mayor a 0";
-            $messageType = 'error';
-        } elseif (empty($pagado_a)) {
-            $message = "Debe especificar a quién se le pagó";
-            $messageType = 'error';
-        } elseif (empty($fecha_pago)) {
-            $message = "Debe seleccionar la fecha de pago";
-            $messageType = 'error';
-        } elseif (empty($motivo)) {
-            $message = "Debe especificar el motivo del egreso";
-            $messageType = 'error';
-        } else {
-            try {
-                $query = "INSERT INTO egresos (monto, pagado_a, fecha_pago, motivo, realizado_por) 
-                         VALUES (?, ?, ?, ?, ?)";
-                $stmt = $db->prepare($query);
-                $stmt->execute([$monto, $pagado_a, $fecha_pago, $motivo, $_SESSION['usuario_id']]);
-                
-                $message = "Egreso registrado correctamente";
-                $messageType = 'success';
-                
-                // Limpiar formulario
-                $_POST = array();
-            } catch (Exception $e) {
-                $message = "Error al registrar el egreso: " . $e->getMessage();
-                $messageType = 'error';
-            }
-        }
-    }
-
-    // Filtros
-    $filtro_mes = $_GET['mes'] ?? date('Y-m');
-    $filtro_usuario = $_GET['usuario'] ?? '';
-
-    // Construir consulta con filtros
-    $where_conditions = [];
-    $params = [];
-
-    if ($filtro_mes) {
-        $where_conditions[] = "DATE_FORMAT(e.fecha_pago, '%Y-%m') = ?";
-        $params[] = $filtro_mes;
-    }
-
-    if ($filtro_usuario) {
-        $where_conditions[] = "e.realizado_por = ?";
-        $params[] = $filtro_usuario;
-    }
-
-    $where_clause = '';
-    if (!empty($where_conditions)) {
-        $where_clause = "WHERE " . implode(' AND ', $where_conditions);
-    }
-
-    // Obtener egresos
-    $query = "SELECT e.*, u.nombre as realizado_por_nombre, u.rol
-              FROM egresos e 
-              JOIN usuarios u ON e.realizado_por = u.id
-              $where_clause
-              ORDER BY e.fecha_pago DESC";
-    
-    $stmt = $db->prepare($query);
-    $stmt->execute($params);
-    $egresos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Obtener miembros del comité para filtro
-    $query = "SELECT id, nombre, rol FROM usuarios WHERE rol IN ('presidente', 'secretario', 'vocal') ORDER BY rol, nombre";
-    $stmt = $db->prepare($query);
-    $stmt->execute();
-    $miembros_comite = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Calcular estadísticas
-    $total_egresos = array_sum(array_column($egresos, 'monto'));
-    $total_mes_actual = 0;
-    $total_general = 0;
-
-    // Total del mes actual
-    $query = "SELECT SUM(monto) as total FROM egresos WHERE DATE_FORMAT(fecha_pago, '%Y-%m') = ?";
-    $stmt = $db->prepare($query);
-    $stmt->execute([date('Y-m')]);
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_mes_actual = $result['total'] ?? 0;
-
-    // Total general
-    $query = "SELECT SUM(monto) as total FROM egresos";
-    $stmt = $db->prepare($query);
-    $stmt->execute();
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_general = $result['total'] ?? 0;
-    ?>
-
     <div class="header">
         <h1>📊 Control de Egresos</h1>
         <div class="nav-links">

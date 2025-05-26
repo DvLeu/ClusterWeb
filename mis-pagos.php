@@ -1,4 +1,83 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar sesión
+if (!isset($_SESSION['usuario_id'])) {
+    header("Location: login.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+$message = '';
+$messageType = '';
+
+// Procesar nuevo pago
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['registrar_pago'])) {
+    $monto = floatval($_POST['monto']);
+    $recargo = floatval($_POST['recargo'] ?? 0);
+    $fecha_pago = $_POST['fecha_pago'];
+    $mes_correspondiente = $_POST['mes_correspondiente'];
+    $concepto = trim($_POST['concepto']);
+    
+    $total = $monto + $recargo;
+
+    // Validaciones
+    if ($monto <= 0) {
+        $message = "El monto debe ser mayor a 0";
+        $messageType = 'error';
+    } elseif (empty($fecha_pago)) {
+        $message = "Debe seleccionar la fecha de pago";
+        $messageType = 'error';
+    } elseif (empty($mes_correspondiente)) {
+        $message = "Debe seleccionar el mes correspondiente";
+        $messageType = 'error';
+    } else {
+        // Verificar si ya existe un pago para ese mes
+        $query = "SELECT COUNT(*) as total FROM pagos_mantenimiento 
+                 WHERE usuario_id = ? AND mes_correspondiente = ?";
+        $stmt = $db->prepare($query);
+        $stmt->execute([$_SESSION['usuario_id'], $mes_correspondiente]);
+        $existe = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existe['total'] > 0) {
+            $message = "Ya existe un pago registrado para el mes seleccionado";
+            $messageType = 'error';
+        } else {
+            try {
+                $query = "INSERT INTO pagos_mantenimiento 
+                         (usuario_id, monto, recargo, total, fecha_pago, mes_correspondiente, concepto) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?)";
+                $stmt = $db->prepare($query);
+                $stmt->execute([$_SESSION['usuario_id'], $monto, $recargo, $total, $fecha_pago, $mes_correspondiente, $concepto]);
+                
+                $message = "Pago registrado correctamente. Pendiente de verificación por el comité.";
+                $messageType = 'success';
+            } catch (Exception $e) {
+                $message = "Error al registrar el pago: " . $e->getMessage();
+                $messageType = 'error';
+            }
+        }
+    }
+}
+
+// Obtener historial de pagos del usuario
+$query = "SELECT pm.*, r.numero_recibo 
+          FROM pagos_mantenimiento pm 
+          LEFT JOIN recibos r ON pm.id = r.pago_id
+          WHERE pm.usuario_id = ? 
+          ORDER BY pm.fecha_pago DESC";
+$stmt = $db->prepare($query);
+$stmt->execute([$_SESSION['usuario_id']]);
+$mis_pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Calcular estadísticas
+$total_pagado = array_sum(array_column($mis_pagos, 'total'));
+$pagos_verificados = count(array_filter($mis_pagos, function($p) { return $p['verificado']; }));
+$pagos_pendientes = count($mis_pagos) - $pagos_verificados;
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -243,87 +322,6 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar sesión
-    if (!isset($_SESSION['usuario_id'])) {
-        header("Location: login.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-    
-    $message = '';
-    $messageType = '';
-
-    // Procesar nuevo pago
-    if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['registrar_pago'])) {
-        $monto = floatval($_POST['monto']);
-        $recargo = floatval($_POST['recargo'] ?? 0);
-        $fecha_pago = $_POST['fecha_pago'];
-        $mes_correspondiente = $_POST['mes_correspondiente'];
-        $concepto = trim($_POST['concepto']);
-        
-        $total = $monto + $recargo;
-
-        // Validaciones
-        if ($monto <= 0) {
-            $message = "El monto debe ser mayor a 0";
-            $messageType = 'error';
-        } elseif (empty($fecha_pago)) {
-            $message = "Debe seleccionar la fecha de pago";
-            $messageType = 'error';
-        } elseif (empty($mes_correspondiente)) {
-            $message = "Debe seleccionar el mes correspondiente";
-            $messageType = 'error';
-        } else {
-            // Verificar si ya existe un pago para ese mes
-            $query = "SELECT COUNT(*) as total FROM pagos_mantenimiento 
-                     WHERE usuario_id = ? AND mes_correspondiente = ?";
-            $stmt = $db->prepare($query);
-            $stmt->execute([$_SESSION['usuario_id'], $mes_correspondiente]);
-            $existe = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($existe['total'] > 0) {
-                $message = "Ya existe un pago registrado para el mes seleccionado";
-                $messageType = 'error';
-            } else {
-                try {
-                    $query = "INSERT INTO pagos_mantenimiento 
-                             (usuario_id, monto, recargo, total, fecha_pago, mes_correspondiente, concepto) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?)";
-                    $stmt = $db->prepare($query);
-                    $stmt->execute([$_SESSION['usuario_id'], $monto, $recargo, $total, $fecha_pago, $mes_correspondiente, $concepto]);
-                    
-                    $message = "Pago registrado correctamente. Pendiente de verificación por el comité.";
-                    $messageType = 'success';
-                } catch (Exception $e) {
-                    $message = "Error al registrar el pago: " . $e->getMessage();
-                    $messageType = 'error';
-                }
-            }
-        }
-    }
-
-    // Obtener historial de pagos del usuario
-    $query = "SELECT pm.*, r.numero_recibo 
-              FROM pagos_mantenimiento pm 
-              LEFT JOIN recibos r ON pm.id = r.pago_id
-              WHERE pm.usuario_id = ? 
-              ORDER BY pm.fecha_pago DESC";
-    $stmt = $db->prepare($query);
-    $stmt->execute([$_SESSION['usuario_id']]);
-    $mis_pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Calcular estadísticas
-    $total_pagado = array_sum(array_column($mis_pagos, 'total'));
-    $pagos_verificados = count(array_filter($mis_pagos, function($p) { return $p['verificado']; }));
-    $pagos_pendientes = count($mis_pagos) - $pagos_verificados;
-    ?>
-
     <div class="header">
         <h1>💳 Mis Pagos de Mantenimiento</h1>
         <div class="nav-links">

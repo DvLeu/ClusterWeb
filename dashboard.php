@@ -1,4 +1,63 @@
-<!DOCTYPE html>
+<?php
+session_start();
+require_once 'config/database.php';
+
+// Verificar sesión
+if (!isset($_SESSION['usuario_id'])) {
+    header("Location: login.php");
+    exit();
+}
+
+$database = new Database();
+$db = $database->getConnection();
+
+// Obtener estadísticas generales
+$total_casas = 60;
+$cuota_mantenimiento = 650;
+
+// Estadísticas para el comité
+if (in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
+    // Total de pagos verificados este mes
+    $query = "SELECT COUNT(*) as total, SUM(total) as monto FROM pagos_mantenimiento 
+             WHERE verificado = 1 AND DATE_FORMAT(fecha_pago, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $pagos_mes = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Pagos pendientes de verificación
+    $query = "SELECT COUNT(*) as total FROM pagos_mantenimiento WHERE verificado = 0";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $pagos_pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Total de egresos este mes
+    $query = "SELECT SUM(monto) as total FROM egresos 
+             WHERE DATE_FORMAT(fecha_pago, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $egresos_mes = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Solicitudes pendientes
+    $query = "SELECT COUNT(*) as total FROM solicitudes_servicios WHERE estado = 'pendiente'";
+    $stmt = $db->prepare($query);
+    $stmt->execute();
+    $solicitudes_pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// Actividad reciente
+$query = "SELECT 'pago' as tipo, CONCAT('Pago de ', u.nombre, ' - Casa ', u.numero_casa) as descripcion, 
+                 pm.fecha_pago as fecha
+          FROM pagos_mantenimiento pm 
+          JOIN usuarios u ON pm.usuario_id = u.id 
+          WHERE pm.verificado = 1
+          UNION ALL
+          SELECT 'solicitud' as tipo, CONCAT('Solicitud: ', titulo) as descripcion, fecha_solicitud as fecha
+          FROM solicitudes_servicios
+          ORDER BY fecha DESC LIMIT 5";
+$stmt = $db->prepare($query);
+$stmt->execute();
+$actividad_reciente = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?><!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -44,18 +103,20 @@
             font-size: 0.85rem;
         }
 
-        .logout-btn {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: none;
-            padding: 0.5rem 1rem;
-            border-radius: 5px;
-            cursor: pointer;
-            text-decoration: none;
-            font-size: 0.9rem;
+        .nav-links {
+            display: flex;
+            gap: 1rem;
         }
 
-        .logout-btn:hover {
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.2);
+        }
+
+        .nav-links a:hover {
             background: rgba(255,255,255,0.3);
         }
 
@@ -190,73 +251,16 @@
     </style>
 </head>
 <body>
-    <?php
-    session_start();
-    require_once 'config/database.php';
-
-    // Verificar sesión
-    if (!isset($_SESSION['usuario_id'])) {
-        header("Location: login.php");
-        exit();
-    }
-
-    $database = new Database();
-    $db = $database->getConnection();
-
-    // Obtener estadísticas generales
-    $total_casas = 60;
-    $cuota_mantenimiento = 650;
-
-    // Estadísticas para el comité
-    if (in_array($_SESSION['rol'], ['presidente', 'secretario', 'vocal'])) {
-        // Total de pagos verificados este mes
-        $query = "SELECT COUNT(*) as total, SUM(total) as monto FROM pagos_mantenimiento 
-                 WHERE verificado = 1 AND DATE_FORMAT(fecha_pago, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')";
-        $stmt = $db->prepare($query);
-        $stmt->execute();
-        $pagos_mes = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Pagos pendientes de verificación
-        $query = "SELECT COUNT(*) as total FROM pagos_mantenimiento WHERE verificado = 0";
-        $stmt = $db->prepare($query);
-        $stmt->execute();
-        $pagos_pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Total de egresos este mes
-        $query = "SELECT SUM(monto) as total FROM egresos 
-                 WHERE DATE_FORMAT(fecha_pago, '%Y-%m') = DATE_FORMAT(NOW(), '%Y-%m')";
-        $stmt = $db->prepare($query);
-        $stmt->execute();
-        $egresos_mes = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Solicitudes pendientes
-        $query = "SELECT COUNT(*) as total FROM solicitudes_servicios WHERE estado = 'pendiente'";
-        $stmt = $db->prepare($query);
-        $stmt->execute();
-        $solicitudes_pendientes = $stmt->fetch(PDO::FETCH_ASSOC);
-    }
-
-    // Actividad reciente
-    $query = "SELECT 'pago' as tipo, CONCAT('Pago de ', u.nombre, ' - Casa ', u.numero_casa) as descripcion, 
-                     pm.fecha_pago as fecha
-              FROM pagos_mantenimiento pm 
-              JOIN usuarios u ON pm.usuario_id = u.id 
-              WHERE pm.verificado = 1
-              UNION ALL
-              SELECT 'solicitud' as tipo, CONCAT('Solicitud: ', titulo) as descripcion, fecha_solicitud as fecha
-              FROM solicitudes_servicios
-              ORDER BY fecha DESC LIMIT 5";
-    $stmt = $db->prepare($query);
-    $stmt->execute();
-    $actividad_reciente = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    ?>
-
     <div class="header">
         <h1>🏘️ Cluster Admin</h1>
         <div class="user-info">
             <span><?php echo $_SESSION['nombre']; ?></span>
             <span class="user-role"><?php echo ucfirst($_SESSION['rol']); ?> - Casa <?php echo $_SESSION['numero_casa']; ?></span>
-            <a href="logout.php" class="logout-btn">Cerrar Sesión</a>
+            <div class="nav-links">
+                <a href="dashboard.php">Dashboard</a>
+                <a href="equipo.php">Nuestro Equipo</a>
+                <a href="logout.php">Cerrar Sesión</a>
+            </div>
         </div>
     </div>
 
@@ -316,6 +320,10 @@
             <a href="solicitudes.php" class="nav-card">
                 <h3><span class="icon">🔧</span> Solicitudes de Servicio</h3>
                 <p>Reportar problemas o solicitar mantenimiento</p>
+            </a>
+            <a href="equipo.php" class="nav-card">
+                <h3><span class="icon">👥</span> Nuestro Equipo</h3>
+                <p>Conoce a los desarrolladores del sistema</p>
             </a>
         </div>
         <?php endif; ?>
